@@ -3,7 +3,7 @@ from flask import Flask, request, jsonify, render_template, make_response
 from pymongo import MongoClient
 import gridfs
 import pytesseract
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image, ImageEnhance
 from bson.objectid import ObjectId
 from datetime import datetime
 import pandas as pd
@@ -22,7 +22,7 @@ app = Flask(__name__)
 # ============================================================================
 
 MONGODB_URI = 'mongodb://localhost:27017/'
-DATABASE_NAME = 'bill_ocr_db'`````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````````
+DATABASE_NAME = 'bill_ocr_db'
 
 # Kết nối MongoDB
 try:
@@ -466,59 +466,64 @@ class FieldExtractor:
         
         'water': {
             'company_name': [
-                r'CÔNG\s*TY.*?NƯỚC\s+([^\n]+?)(?=\n|Mã)',
+                r'(CÔNG\s*TY[^\n]*?NƯỚC[^\n]*?(?=\s*Ký\s*hiệu|\s*Địa\s*chỉ|\n|$))',
             ],
             'company_tax_code': [
-                r'Mã\s*số\s*thuế[^\d]{0,50}(\d{10,13})',
+                r'Mã\s*(?:số|số\s*thuế)[^\d]{0,10}(\d{10,13})',
             ],
             'company_address': [
-                r'Địa\s*chỉ[^\n:]{0,30}:\s*([^\n]+)',
+                # Cắt từ “Địa chỉ” cho đến trước khi gặp “Số:” hoặc “Mã số thuế” hoặc “HÓA ĐƠN”
+                r'Địa\s*chỉ[:\s]*([A-Z0-9].*?)(?=\s*Số[:\s]|Mã\s*số\s*thuế|HÓA\s*ĐƠN|\n|$)',
             ],
-            'company_phone': [
-                r'Điện\s*thoại[^\d]{0,30}(\d{7,11})',
+            'invoice_symbol': [
+                r'Ký\s*hiệu[:\s]*([A-Z0-9]{5,})',
             ],
             'invoice_number': [
-                r'Số\s*hóa\s*đơn[^\d]{0,30}(\d+)',
+                r'Số[:\s]*(\d{6,})',
             ],
             'invoice_date': [
-                r'Ngày[^\d]{0,30}(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})',
+                r'Ngày\s*ký[:\s]*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
+                r'Ngày\s+(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{4})',
             ],
             'customer_name': [
-                r'Tên\s*khách\s*hàng[^\n:]{0,30}:\s*([^\n]+)',
-                r'Họ\s*tên[^\n:]{0,30}:\s*([^\n]+)',
+                r'Tên\s*(?:khách\s*hàng|kh)\s*[:\-\s]*([A-ZÁÀÂÃÄĂẮẰẲẴẶÂÉÈÊẾỀỂỄẸÍÌÎÏÓÒÔÕÖƠÚÙÛÜƯÝỲỶỸỴĐa-zàáâãäăắằẳẵặâéèêếềểễẹíìîïóòôõöơúùûüưýỳỷỹỵđ0-9\s\.\-]{2,120}?)(?=\s*(?:Mã|Địa|Tài|Mã số|Thời|Số|$|\n|,|\.))',
+                r'(?:Họ\s*tên|Khách\s*hàng)[:\s]*([A-ZÀÁÂÃÄĂẮẰẲẴẶÂÉÈÊẾỀỂỄẸÍÌÎÏÓÒÔÕÖƠÚÙÛÜƯÝỲỶỸỴĐa-zàáâãäăắằẳẵặâéèêếềểễẹíìîïóòôõöơúùûüưýỳỷỹỵđ\s\.\-]{2,120}?)(?=\s*(?:Mã|Địa|Tài|Mã số|Thời|Số|$|\n|,|\.))',
             ],
             'customer_address': [
-                r'Địa\s*chỉ\s*sử\s*dụng[^\n:]{0,30}:\s*([^\n]+)',
+                r'Địa\s*chỉ\s*[:\-]?\s*([A-ZÀÁÂÃÄĂẮẰẲẴẶÂÉÈÊẾỀỂỄẸÍÌÎÏÓÒÔÕÖƠÚÙÛÜƯÝỲỶỸỴĐa-zàáâãäăắằẳẵặâéèêếềểễẹíìîïóòôõöơúùûüưýỳỷỹỵđ0-9\s\/\.\,\-\(\)]{2,200}?)(?=\s*(?:Mã|Tài|Thời|Số|Phí|Tổng|$|\n|,|\.))',
+                r'(?:Địa\s*điểm|Nơi\s*sử\s*dụng)\s*[:\-]?\s*([A-Z0-9a-zÀ-ỹ\/\s\.,\-]{2,200}?)(?=\s*(?:Mã|Tài|Thời|Số|Phí|Tổng|$|\n|,|\.))',
             ],
             'customer_code': [
-                r'Mã\s*khách\s*hàng[^\w]{0,30}([\w\d]{5,20})',
+                r'Mã\s*(?:số\s*)?khách\s*hàng[:\s]*([0-9A-Z]+)',
             ],
             'old_reading': [
-                r'Chỉ\s*số\s*cũ[^\d]{0,30}([\d\.,]+)',
+                r'Số\s*Đọc\s*Tháng\s*Trước[^\d]{0,10}(\d+)',
             ],
             'new_reading': [
-                r'Chỉ\s*số\s*mới[^\d]{0,30}([\d\.,]+)',
+                r'Số\s*Đọc\s*Tháng\s*Này[^\d]{0,10}(\d+)',
             ],
             'usage': [
-                r'Lượng\s*nước[^\d]{0,30}([\d\.,]+)',
-                r'Tiêu\s*thụ[^\d]{0,30}([\d\.,]+)',
+                r'Số\s*Lượng\s*Tiêu\s*Thụ[^\d]{0,10}(\d+)',
+                r'Tiêu\s*thụ[:\s]*([0-9]+)',
+            ],
+            'env_fee': [
+                r'Phí\s*(?:BVMT|bảo\s*vệ\s*môi\s*trường)[^\d]{0,10}([\d\.]+)',
             ],
             'subtotal': [
-                r'Tổng\s*tiền\s*nước[^\d]{0,30}([\d\.,]+)',
+                r'Cộng\s*(?:tiền\s*hàng|tiền)[^\d]{0,20}([\d\.,]+)',
             ],
             'vat_rate': [
-                r'Thuế[^\d]{0,30}(\d+)\s*%',
-            ],
-            'vat_amount': [
-                r'Tiền\s*thuế[^\d]{0,30}([\d\.,]+)',
+                r'Thuế\s*Suất[:\s]*(\d+)\s*%',
             ],
             'total_amount': [
-                r'Tổng\s*cộng[^\d]{0,30}([\d\.,]+)',
+                r'Tổng\s*(?:tiền\s*thanh\s*toán|cộng)[^\d]{0,20}([\d\.,]+)',
             ],
-            'payment_method': [
-                r'Hình\s*thức\s*thanh\s*toán[^\n:]{0,30}:\s*([^\n]+)',
+            'total_in_words': [
+                r'Số\s*tiền\s*bằng\s*chữ[:\s]*([^\n]+)',
             ],
-        }
+        },
+
+
     }
     @classmethod
     def extract(cls, text: str, bill_type: str) -> Dict[str, Optional[str]]:
@@ -540,22 +545,23 @@ class FieldExtractor:
         text = re.sub(r'\s*:\s*', ': ', text)
         return text
     
-    @staticmethod
-    def extract_field(text: str, patterns: List[str]) -> Optional[str]:
-        """Thử nhiều pattern"""
+    @classmethod
+    def extract_field(cls, text, patterns):
         for pattern in patterns:
-            match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+            match = re.search(pattern, text, re.IGNORECASE)
             if match:
-                # Lấy group cuối cùng
-                result = match.group(match.lastindex or 1).strip()
-                result = re.sub(r'\s+', ' ', result)
-                if len(result) > 1:
+                try:
+                    # Nếu regex có nhóm bắt, lấy group(1); nếu không, lấy toàn bộ match
+                    if match.lastindex:
+                        result = match.group(match.lastindex or 1).strip()
+                    else:
+                        result = match.group(0).strip()
                     return result
-        return None
+                except IndexError:
+                    continue
+        return ""
 
-# ============================================================================
-# MAIN PIPELINE
-# ============================================================================
+
 
 class BillOCRPipeline:
     """Pipeline chính"""
