@@ -17,32 +17,21 @@ import traceback
 
 app = Flask(__name__)
 
-# ============================================================================
-# CONFIG
-# ============================================================================
-
 MONGODB_URI = 'mongodb://localhost:27017/'
 DATABASE_NAME = 'bill_ocr_db'
 
-# Kết nối MongoDB
 try:
     client = MongoClient(MONGODB_URI)
     db = client[DATABASE_NAME]
     fs = gridfs.GridFS(db)
     # Test connection
     client.server_info()
-    print("✅ MongoDB connected successfully")
 except Exception as e:
     print(f"❌ MongoDB connection failed: {e}")
-    print("⚠️  System will continue but data won't be saved")
 
-# ============================================================================
-# DATA MODELS
-# ============================================================================
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'  # Điều chỉnh đường dẫn nếu khác
 @dataclass
 class BillData:
-    """Model dữ liệu hóa đơn chuẩn"""
     # Metadata
     bill_type: str  # 'electric' hoặc 'water'
     confidence_score: float  # 0.0 - 1.0
@@ -94,19 +83,9 @@ class BillData:
     def to_dict(self):
         return asdict(self)
 
-# ============================================================================
-# IMAGE PREPROCESSING
-# ============================================================================
-
 class ImagePreprocessor:
-    """Xử lý ảnh đa cấp với fallback strategies"""
-    
     @staticmethod
     def assess_image_quality(image: np.ndarray) -> Tuple[float, str]:
-        """
-        Đánh giá chất lượng ảnh
-        Returns: (quality_score, description)
-        """
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
         # Tính độ sắc nét (Laplacian variance)
@@ -126,107 +105,58 @@ class ImagePreprocessor:
     def preprocess_level_1(image: np.ndarray) -> Image.Image:
         """Level 1: Xử lý cơ bản - cho ảnh chất lượng tốt"""
         print("    Using Level 1 preprocessing (light)")
-        
-        # Resize 1.5x
         image = cv2.resize(image, None, fx=1.5, fy=1.5, interpolation=cv2.INTER_CUBIC)
-        
-        # Grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Simple threshold
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        
         return Image.fromarray(binary)
     
     @staticmethod
     def preprocess_level_2(image: np.ndarray) -> Image.Image:
         """Level 2: Xử lý nâng cao - cho ảnh chất lượng trung bình"""
         print("    Using Level 2 preprocessing (medium)")
-        
-        # Resize 2x
         image = cv2.resize(image, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
-        
-        # Grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Denoise
         denoised = cv2.fastNlMeansDenoising(gray, h=10)
-        
-        # Contrast enhancement
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         contrast = clahe.apply(denoised)
-        
-        # Adaptive threshold
-        binary = cv2.adaptiveThreshold(
-            contrast, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
-            cv2.THRESH_BINARY, 11, 2
-        )
-        
-        # Sharpen
+        binary = cv2.adaptiveThreshold(contrast, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                       cv2.THRESH_BINARY, 11, 2)
         pil_image = Image.fromarray(binary)
-        enhancer = ImageEnhance.Sharpness(pil_image)
-        return enhancer.enhance(1.5)
+        return ImageEnhance.Sharpness(pil_image).enhance(1.5)
     
     @staticmethod
     def preprocess_level_3(image: np.ndarray) -> Image.Image:
         """Level 3: Xử lý tối đa - cho ảnh chất lượng kém"""
         print("    Using Level 3 preprocessing (aggressive)")
-        
-        # Resize 3x
         image = cv2.resize(image, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        
-        # Grayscale
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        
-        # Denoise mạnh
         denoised = cv2.fastNlMeansDenoising(gray, h=15)
-        
-        # Morphological operations
         kernel = np.ones((2,2), np.uint8)
         morph = cv2.morphologyEx(denoised, cv2.MORPH_CLOSE, kernel)
-        
-        # Contrast enhancement
         clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8,8))
         contrast = clahe.apply(morph)
-        
-        # Threshold
         _, binary = cv2.threshold(contrast, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Deskew
         coords = np.column_stack(np.where(binary > 0))
         if len(coords) > 0:
             angle = cv2.minAreaRect(coords)[-1]
-            if angle < -45:
-                angle = -(90 + angle)
-            else:
-                angle = -angle
-            
+            angle = -(90 + angle) if angle < -45 else -angle
             if abs(angle) > 0.5:
-                (h, w) = binary.shape[:2]
-                center = (w // 2, h // 2)
-                M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                binary = cv2.warpAffine(binary, M, (w, h), 
-                                     flags=cv2.INTER_CUBIC, 
-                                     borderMode=cv2.BORDER_REPLICATE)
+                h, w = binary.shape[:2]
+                M = cv2.getRotationMatrix2D((w // 2, h // 2), angle, 1.0)
+                binary = cv2.warpAffine(binary, M, (w, h), flags=cv2.INTER_CUBIC, 
+                                       borderMode=cv2.BORDER_REPLICATE)
         
-        pil_image = Image.fromarray(binary)
-        enhancer = ImageEnhance.Sharpness(pil_image)
-        return enhancer.enhance(2.0)
+        return ImageEnhance.Sharpness(Image.fromarray(binary)).enhance(2.0)
     
     @classmethod
     def preprocess_auto(cls, image_bytes: bytes) -> Tuple[Image.Image, int, str]:
-        """
-        Tự động chọn level xử lý phù hợp
-        Returns: (processed_image, level_used, quality_description)
-        """
+        """Tự động chọn level xử lý phù hợp - Returns: (processed_image, level_used, quality_description)"""
         nparr = np.frombuffer(image_bytes, np.uint8)
         image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-        
-        # Đánh giá chất lượng
         quality_score, quality_desc = cls.assess_image_quality(image)
         print(f"    Image quality: {quality_score:.2f} - {quality_desc}")
         
-        # Chọn level
         if quality_score > 500:
             return cls.preprocess_level_1(image), 1, quality_desc
         elif quality_score > 100:
@@ -249,12 +179,8 @@ class OCREngine:
     
     @classmethod
     def run_ocr(cls, image: Image.Image) -> Tuple[str, str, float]:
-        """
-        Chạy OCR với nhiều config, chọn kết quả tốt nhất
-        Returns: (best_text, config_name, confidence)
-        """
+        """Chạy OCR với nhiều config, chọn kết quả tốt nhất - Returns: (best_text, config_name, confidence)"""
         results = []
-        
         for config_name, config_str in cls.CONFIGS:
             try:
                 text = pytesseract.image_to_string(image, lang='vie', config=config_str)
@@ -268,7 +194,6 @@ class OCREngine:
             best = max(results, key=lambda x: x[2])
             print(f"      → Best: {best[1]} with confidence {best[2]:.2f}")
             return best
-        
         return "", "none", 0.0
     
     @staticmethod
@@ -302,39 +227,14 @@ class TextCorrector:
     """Sửa lỗi OCR cho tiếng Việt"""
     
     COMMON_ERRORS = {
-        # Công ty
-        'công dà': 'công ty',
-        'drà lệ': 'điện lực',
-        'ccai giả': 'cầu giấy',
-        'cai giay': 'cầu giấy',
-        'ccông': 'công',
-        
-        # Thông tin cơ bản
-        'hoa don': 'hóa đơn',
-        'hoá đơn': 'hóa đơn',
-        'dia chi': 'địa chỉ',
-        'dien thoai': 'điện thoại',
-        'phose': 'phone',
-        'ma so thue': 'mã số thuế',
-        'khach hang': 'khách hàng',
-        'khách răng': 'khách hàng',
-        'tong cong': 'tổng cộng',
-        'thanh toan': 'thanh toán',
-        'qhanh hên': 'thanh toán',
-        
-        # Số liệu
-        'tieu thu': 'tiêu thụ',
-        'chi so': 'chỉ số',
-        'don gia': 'đơn giá',
-        'thanh tien': 'thành tiền',
-        
-        # Ký tự lỗi
-        '4': 'số',
-        'răng': 'hàng',
-        '6': 'số',
-        's6': 'số',
-        'l': 'i',
-        'lI': 'II',
+        'công dà': 'công ty', 'drà lệ': 'điện lực', 'ccai giả': 'cầu giấy',
+        'cai giay': 'cầu giấy', 'ccông': 'công', 'hoa don': 'hóa đơn',
+        'hoá đơn': 'hóa đơn', 'dia chi': 'địa chỉ', 'dien thoai': 'điện thoại',
+        'phose': 'phone', 'ma so thue': 'mã số thuế', 'khach hang': 'khách hàng',
+        'khách răng': 'khách hàng', 'tong cong': 'tổng cộng', 'thanh toan': 'thanh toán',
+        'qhanh hên': 'thanh toán', 'tieu thu': 'tiêu thụ', 'chi so': 'chỉ số',
+        'don gia': 'đơn giá', 'thanh tien': 'thành tiền', '4': 'số', 'răng': 'hàng',
+        '6': 'số', 's6': 'số', 'l': 'i', 'lI': 'II',
     }
     
     @classmethod
@@ -343,17 +243,12 @@ class TextCorrector:
         if not text:
             return text
         
-        corrected = text
-        
-        # Sửa các lỗi thường gặp
         for wrong, correct in cls.COMMON_ERRORS.items():
-            corrected = re.sub(r'\b' + re.escape(wrong) + r'\b', correct, corrected, flags=re.IGNORECASE)
+            text = re.sub(r'\b' + re.escape(wrong) + r'\b', correct, text, flags=re.IGNORECASE)
         
-        # Chuẩn hóa khoảng trắng
-        corrected = re.sub(r'\s+', ' ', corrected)
-        corrected = re.sub(r'\n\s*\n', '\n', corrected)
-        
-        return corrected
+        text = re.sub(r'\s+', ' ', text)
+        text = re.sub(r'\n\s*\n', '\n', text)
+        return text
 
 # ============================================================================
 # FIELD EXTRACTOR
@@ -529,14 +424,9 @@ class FieldExtractor:
     def extract(cls, text: str, bill_type: str) -> Dict[str, Optional[str]]:
         """Trích xuất các field từ text"""
         patterns = cls.PATTERNS.get(bill_type, {})
-        result = {}
-        
         text_normalized = cls.normalize_text(text)
-        
-        for field_name, pattern_list in patterns.items():
-            result[field_name] = cls.extract_field(text_normalized, pattern_list)
-        
-        return result
+        return {field: cls.extract_field(text_normalized, pattern_list) 
+                for field, pattern_list in patterns.items()}
     
     @staticmethod
     def normalize_text(text: str) -> str:
@@ -551,11 +441,7 @@ class FieldExtractor:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 try:
-                    # Nếu regex có nhóm bắt, lấy group(1); nếu không, lấy toàn bộ match
-                    if match.lastindex:
-                        result = match.group(match.lastindex or 1).strip()
-                    else:
-                        result = match.group(0).strip()
+                    result = match.group(match.lastindex or 1).strip() if match.lastindex else match.group(0).strip()
                     return result
                 except IndexError:
                     continue
@@ -569,39 +455,31 @@ class BillOCRPipeline:
     @staticmethod
     def process(image_bytes: bytes, bill_type: str) -> BillData:
         """Xử lý toàn bộ pipeline"""
-        
-        # Step 1: Preprocess
         print("  [1/5] Preprocessing image...")
         processed_image, level, quality = ImagePreprocessor.preprocess_auto(image_bytes)
         
-        # Step 2: OCR
         print("  [2/5] Running OCR...")
         ocr_text, config_name, ocr_confidence = OCREngine.run_ocr(processed_image)
         print(f"      → Extracted {len(ocr_text)} characters")
         
-        # Step 3: Correct
         print("  [3/5] Correcting text...")
         corrected_text = TextCorrector.correct(ocr_text)
         
-        # Step 4: Extract
         print("  [4/5] Extracting fields...")
         extracted = FieldExtractor.extract(corrected_text, bill_type)
         found_fields = len([v for v in extracted.values() if v])
         print(f"      → Found {found_fields}/{len(extracted)} fields")
         
-        # Step 5: Build result
         print("  [5/5] Building result...")
-        bill_data = BillData(
+        return BillData(
             bill_type=bill_type,
             confidence_score=ocr_confidence,
             preprocessing_level=level,
             ocr_config_used=config_name,
-            ocr_raw_text=ocr_text[:5000],  # Limit size
+            ocr_raw_text=ocr_text[:5000],
             ocr_corrected_text=corrected_text[:5000],
             **extracted
         )
-        
-        return bill_data
 
 # ============================================================================
 # FLASK ROUTES
@@ -724,7 +602,6 @@ def get_bill(id):
         bill['file_id'] = str(bill['file_id'])
         if bill.get('excel_file_id'):
             bill['excel_file_id'] = str(bill['excel_file_id'])
-        
         return jsonify({'success': True, 'bill': bill})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -737,15 +614,12 @@ def delete_bill(id):
         if not bill:
             return jsonify({'error': 'Bill not found'}), 404
         
-        # Xóa files
         if bill.get('file_id'):
             fs.delete(bill['file_id'])
         if bill.get('excel_file_id'):
             fs.delete(bill['excel_file_id'])
         
-        # Xóa record
         db.bills.delete_one({'_id': ObjectId(id)})
-        
         return jsonify({'success': True, 'message': 'Bill deleted'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -778,26 +652,15 @@ def get_excel(id):
 def get_stats():
     """Thống kê hệ thống"""
     try:
-        total_bills = db.bills.count_documents({})
-        electric_bills = db.bills.count_documents({'bill_type': 'electric'})
-        water_bills = db.bills.count_documents({'bill_type': 'water'})
-        
-        # Tính confidence trung bình
-        pipeline = [
-            {'$group': {
-                '_id': None,
-                'avg_confidence': {'$avg': '$confidence_score'}
-            }}
-        ]
-        avg_result = list(db.bills.aggregate(pipeline))
+        avg_result = list(db.bills.aggregate([{'$group': {'_id': None, 'avg_confidence': {'$avg': '$confidence_score'}}}]))
         avg_confidence = avg_result[0]['avg_confidence'] if avg_result else 0
         
         return jsonify({
             'success': True,
             'stats': {
-                'total_bills': total_bills,
-                'electric_bills': electric_bills,
-                'water_bills': water_bills,
+                'total_bills': db.bills.count_documents({}),
+                'electric_bills': db.bills.count_documents({'bill_type': 'electric'}),
+                'water_bills': db.bills.count_documents({'bill_type': 'water'}),
                 'avg_confidence': round(avg_confidence, 2)
             }
         })
@@ -805,27 +668,4 @@ def get_stats():
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
-    print("\n" + "="*70)
-    print("🚀 Bill OCR System v2.0 Starting...")
-    print("="*70)
-    print("📋 Supported: Electric bills (Hóa đơn điện), Water bills (Hóa đơn nước)")
-    print("🎯 Features:")
-    print("   - Auto image quality assessment")
-    print("   - Multi-level preprocessing (3 levels)")
-    print("   - Multi-config OCR (3 configs)")
-    print("   - Smart field extraction")
-    print("   - MongoDB storage with GridFS")
-    print("   - Excel export")
-    print("="*70)
-    print("📡 Endpoints:")
-    print("   GET  /              - Web interface")
-    print("   POST /upload        - Upload & process bill")
-    print("   GET  /bills         - List all bills")
-    print("   GET  /bill/<id>     - Get bill details")
-    print("   DEL  /bill/<id>     - Delete bill")
-    print("   GET  /file/<id>     - Download original image")
-    print("   GET  /excel/<id>    - Download Excel result")
-    print("   GET  /stats         - System statistics")
-    print("="*70 + "\n")
-    
     app.run(debug=True, host='0.0.0.0', port=5000)
