@@ -335,26 +335,20 @@ Dự án được phát triển bởi:
 
 | Họ và Tên | Vai trò |
 |-----------|---------|
-| **[Tên bạn]** | Phát triển toàn bộ hệ thống OCR, thiết kế kiến trúc, implement Fuzzy Matching, training & testing, biên soạn tài liệu |
+| **[Nguyễn Ngọc Bảo Long]** | Phát triển toàn bộ hệ thống OCR, thiết kế kiến trúc, implement Fuzzy Matching, training & testing, biên soạn tài liệu |
+| **[Vũ Khánh Hoàn]** | Phát triển toàn bộ hệ thống OCR, thiết kế kiến trúc, implement Fuzzy Matching, training & testing, biên soạn tài liệu |
 
-**Giảng viên hướng dẫn:** [Tên giảng viên]
+**Giảng viên hướng dẫn:** Nguyễn Thái Khánh , Lê Trung Hiếu
 
 ---
 
 ## 📄 License
 
-© 2025 [Tên nhóm], [Lớp], TRƯỜNG ĐẠI HỌC ĐẠI NAM
+© 2025 [Nhóm 5], [CNTT 16-02], TRƯỜNG ĐẠI HỌC ĐẠI NAM
 
 ---
 
-<div align="center">
-
-### ⭐ Nếu project hữu ích, hãy cho 1 star nhé! ⭐
-
-**Made with ❤️ by [Your Name]**
-
-</div>
-
 ## 🏗️ KIẾN TRÚC HỆ THỐNG
+
 
 
